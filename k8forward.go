@@ -83,7 +83,12 @@ func Run(ctx context.Context, namespace, appName, localPort, remotePort string, 
 	}
 
 	portForwardOptions.StopChannel = make(chan struct{}, 1)
-	portForwardOptions.ReadyChannel = readyChan
+
+	if readyChan != nil {
+		portForwardOptions.ReadyChannel = readyChan
+	} else {
+		portForwardOptions.ReadyChannel = make(chan struct{})
+	}
 
 	if err = portForwardOptions.Validate(); err != nil {
 		return fmt.Errorf("error validating the k8s portforward options: %w", err)
