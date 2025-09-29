@@ -16,8 +16,8 @@ import (
 	"k8s.io/kubectl/pkg/cmd/util"
 )
 
-func RunWithCancelFn(ctx context.Context, namespace, appName, localPort, remotePort string, cancelFn context.CancelFunc) error {
-	if err := Run(ctx, namespace, appName, localPort, remotePort); err != nil {
+func RunWithCancelFn(ctx context.Context, namespace, appName, localPort, remotePort string, readyChan chan struct{}, cancelFn context.CancelFunc) error {
+	if err := Run(ctx, namespace, appName, localPort, remotePort, readyChan); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
@@ -27,7 +27,7 @@ func RunWithCancelFn(ctx context.Context, namespace, appName, localPort, remoteP
 	return nil
 }
 
-func Run(ctx context.Context, namespace, appName, localPort, remotePort string) error {
+func Run(ctx context.Context, namespace, appName, localPort, remotePort string, readyChan chan struct{}) error {
 	homeDir, ok := os.LookupEnv("HOME")
 	if !ok {
 		return fmt.Errorf("cannot locate home directory")
@@ -83,7 +83,7 @@ func Run(ctx context.Context, namespace, appName, localPort, remotePort string) 
 	}
 
 	portForwardOptions.StopChannel = make(chan struct{}, 1)
-	portForwardOptions.ReadyChannel = make(chan struct{})
+	portForwardOptions.ReadyChannel = readyChan
 
 	if err = portForwardOptions.Validate(); err != nil {
 		return fmt.Errorf("error validating the k8s portforward options: %w", err)
