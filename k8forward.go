@@ -16,6 +16,17 @@ import (
 	"k8s.io/kubectl/pkg/cmd/util"
 )
 
+func RunWithCancelFn(ctx context.Context, namespace, appName, localPort, remotePort string, cancelFn context.CancelFunc) error {
+	if err := Run(ctx, namespace, appName, localPort, remotePort); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		cancelFn()
+		return err
+	}
+	return nil
+}
+
 func Run(ctx context.Context, namespace, appName, localPort, remotePort string) error {
 	homeDir, ok := os.LookupEnv("HOME")
 	if !ok {
@@ -29,7 +40,7 @@ func Run(ctx context.Context, namespace, appName, localPort, remotePort string) 
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return fmt.Errorf("error creating clientset: %w", err)
+		return fmt.Errorf("error creating k8s clientset: %w", err)
 	}
 
 	podClient := clientset.CoreV1()
@@ -40,7 +51,7 @@ func Run(ctx context.Context, namespace, appName, localPort, remotePort string) 
 		return fmt.Errorf("error listing k8s pods: %w", err)
 	}
 	if len(pods.Items) == 0 {
-		return fmt.Errorf("no k8s pods found for app %s in namespace %s", appName, namespace)
+		return fmt.Errorf("no k8s pods found for app '%s' in namespace %s", appName, namespace)
 	}
 
 	var podName string
@@ -68,23 +79,19 @@ func Run(ctx context.Context, namespace, appName, localPort, remotePort string) 
 	portForwardOptions.Config = config
 	portForwardOptions.RESTClient, err = factory.RESTClient()
 	if err != nil {
-		return fmt.Errorf("error configuring REST client: %w", err)
+		return fmt.Errorf("error configuring k8s REST client: %w", err)
 	}
 
 	portForwardOptions.StopChannel = make(chan struct{}, 1)
 	portForwardOptions.ReadyChannel = make(chan struct{})
 
 	if err = portForwardOptions.Validate(); err != nil {
-		return fmt.Errorf("error validating the portforward options: %w", err)
+		return fmt.Errorf("error validating the k8s portforward options: %w", err)
 	}
 
-	fmt.Printf("Starting port forward from localhost:%s to %s:%s\n", localPort, podName, remotePort)
+	fmt.Printf("Starting k8s port forward from localhost:%s to %s:%s\n", localPort, podName, remotePort)
 	if err = portForwardOptions.RunPortForwardContext(ctx); err != nil {
-		if errors.Is(err, context.Canceled) {
-			fmt.Printf("forwarding cancelled\n")
-			return nil
-		}
-		return fmt.Errorf("error forwarding: %w", err)
+		return fmt.Errorf("error forwarding to k8s pod: %w", err)
 	}
 
 	return nil
