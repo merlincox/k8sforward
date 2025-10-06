@@ -28,4 +28,4 @@ if pfErr != nil {
 // do something requiring port-forwarding using ctx as context.
 ```
 
-Alternatively compile and use from the commandline.
+Alternatively, compile `cmd/main.go` and use the compiled executable from the command line.
