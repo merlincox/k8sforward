@@ -18,11 +18,13 @@ import (
 
 // Init initiates port-forwarding with the given context `ctx` from the k8s pod with app = `appName` in the k8s
 // namespace `namespace` on `remotePort` to localhost:`localPort`.
-// If more than one pod exists in `namespace` that is labelled with app = `appName`, the first pod encountered is used.
+// If `versionName` is not empty, pods with `appName` will be further filtered by version = versionName.
+// If more than one pod exists in `namespace` that is labelled with app = `appName` (and version = versionName, if
+// applicable), the first pod encountered is used.
 // If `readyChan` is given, the commencement of port-forwarding can be detected by receiving from it.
 // If `cancelFn` is given, it will be called upon any error except context.Canceled.
-func Init(ctx context.Context, namespace, appName, localPort, remotePort, version string, readyChan chan struct{}, cancelFn context.CancelFunc) error {
-	if err := run(ctx, namespace, appName, localPort, remotePort, version, readyChan); err != nil {
+func Init(ctx context.Context, namespace, appName, localPort, remotePort, versionName string, readyChan chan struct{}, cancelFn context.CancelFunc) error {
+	if err := run(ctx, namespace, appName, localPort, remotePort, versionName, readyChan); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
@@ -42,13 +44,25 @@ func run(ctx context.Context, namespace, appName, localPort, remotePort, version
 	if !ok {
 		return fmt.Errorf("cannot locate home directory")
 	}
+	k8sConfigPath := filepath.Join(homeDir, ".kube", "config")
 
-	config, err := clientcmd.BuildConfigFromFlags("", filepath.Join(homeDir, ".kube", "config"))
+	apiConfig, err := clientcmd.LoadFromFile(k8sConfigPath)
+
 	if err != nil {
-		return fmt.Errorf("error loading kubeconfig: %w", err)
+		return fmt.Errorf("error loading k8s config file %s: %w", k8sConfigPath, err)
+	}
+	k8sContext := apiConfig.CurrentContext
+
+	// Create a ClientConfig from the apiConfig
+	clientConfig := clientcmd.NewDefaultClientConfig(*apiConfig, &clientcmd.ConfigOverrides{})
+
+	// Get the *rest.Config from the ClientConfig
+	restConfig, err := clientConfig.ClientConfig()
+	if err != nil {
+		return fmt.Errorf("error creating k8s client REST config: %w", err)
 	}
 
-	clientset, err := kubernetes.NewForConfig(config)
+	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return fmt.Errorf("error creating k8s clientset: %w", err)
 	}
@@ -65,7 +79,7 @@ func run(ctx context.Context, namespace, appName, localPort, remotePort, version
 		return fmt.Errorf("error listing k8s pods: %w", err)
 	}
 	if len(pods.Items) == 0 {
-		return fmt.Errorf("no k8s pods found for app '%s' in namespace %s", appName, namespace)
+		return fmt.Errorf("no k8s pods found for app '%s' in namespace %s context %s", appName, namespace, k8sContext)
 	}
 
 	var podName string
@@ -97,7 +111,7 @@ func run(ctx context.Context, namespace, appName, localPort, remotePort, version
 	portForwardOptions.PodName = podName
 	portForwardOptions.Address = []string{"localhost"}
 	portForwardOptions.Ports = []string{fmt.Sprintf("%s:%s", localPort, remotePort)}
-	portForwardOptions.Config = config
+	portForwardOptions.Config = restConfig
 
 	portForwardOptions.StopChannel = make(chan struct{}, 1)
 
