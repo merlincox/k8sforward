@@ -21,8 +21,8 @@ import (
 // If more than one pod exists in `namespace` that is labelled with app = `appName`, the first pod encountered is used.
 // If `readyChan` is given, the commencement of port-forwarding can be detected by receiving from it.
 // If `cancelFn` is given, it will be called upon any error except context.Canceled.
-func Init(ctx context.Context, namespace, appName, localPort, remotePort string, readyChan chan struct{}, cancelFn context.CancelFunc) error {
-	if err := run(ctx, namespace, appName, localPort, remotePort, readyChan); err != nil {
+func Init(ctx context.Context, namespace, appName, localPort, remotePort, version string, readyChan chan struct{}, cancelFn context.CancelFunc) error {
+	if err := run(ctx, namespace, appName, localPort, remotePort, version, readyChan); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
@@ -34,7 +34,7 @@ func Init(ctx context.Context, namespace, appName, localPort, remotePort string,
 	return nil
 }
 
-func run(ctx context.Context, namespace, appName, localPort, remotePort string, readyChan chan struct{}) error {
+func run(ctx context.Context, namespace, appName, localPort, remotePort, version string, readyChan chan struct{}) error {
 	if err := ValidateFlags(namespace, appName, localPort, remotePort); err != nil {
 		return err
 	}
@@ -54,8 +54,12 @@ func run(ctx context.Context, namespace, appName, localPort, remotePort string, 
 	}
 
 	podClient := clientset.CoreV1()
+	labelSelector := fmt.Sprintf("app=%s", appName)
+	if version != "" {
+		labelSelector = fmt.Sprintf("app=%s,version=%s", appName, version)
+	}
 	pods, err := podClient.Pods(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s", appName),
+		LabelSelector: labelSelector,
 	})
 	if err != nil {
 		return fmt.Errorf("error listing k8s pods: %w", err)

@@ -19,6 +19,7 @@ func main() {
 func run() error {
 	namespace := flag.String("n", "", "k8s namespace")
 	appName := flag.String("app", "", "k8s app name")
+	version := flag.String("version", "", "version (optional)")
 	localPort := flag.String("local-port", "", "localhost TCP port to use")
 	remotePort := flag.String("remote-port", "", "remote TCP port to use")
 	flag.Parse()
@@ -26,5 +27,5 @@ func run() error {
 		return err
 	}
 
-	return k8sforward.Init(context.Background(), *namespace, *appName, *localPort, *remotePort, nil, nil)
+	return k8sforward.Init(context.Background(), *namespace, *appName, *localPort, *remotePort, *version, nil, nil)
 }
