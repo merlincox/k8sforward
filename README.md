@@ -13,8 +13,20 @@ var pfErr error
 ctx, cancelFn := context.WithCancel(priorCtx)
 defer cancelFunc()
 readyChan := make(chan struct{})
+
+settings := &k8sforward.Settings{
+  ContextName:    contextName,
+  AppName:        appName,
+  LocalPort:      localPort,
+  RemotePort:     remotePort,
+  VersionName:    versionName,
+  KubeconfigPath: kubeconfigPath,
+  ReadyChannel:   readyChan,
+  CancelFn:       cancelFunc,
+}
+
 go func() {
-  pfErr = k8sforward.Init(ctx, namespace, appName, localPort, remotePort, readyChan, cancelFn)
+  pfErr = k8sforward.Init(ctx, settings)
 }()
 select {
   case <- readyChan:
