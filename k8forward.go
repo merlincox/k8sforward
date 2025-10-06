@@ -16,47 +16,86 @@ import (
 	"k8s.io/kubectl/pkg/cmd/util"
 )
 
-// Init initiates port-forwarding with the given context `ctx` from the k8s pod with app = `appName` in the k8s
-// namespace `namespace` on `remotePort` to localhost:`localPort`.
-// If `versionName` is not empty, pods with `appName` will be further filtered by version = versionName.
-// If more than one pod exists in `namespace` that is labelled with app = `appName` (and version = versionName, if
-// applicable), the first pod encountered is used.
-// If `readyChan` is given, the commencement of port-forwarding can be detected by receiving from it.
-// If `cancelFn` is given, it will be called upon any error except context.Canceled.
-func Init(ctx context.Context, namespace, appName, localPort, remotePort, versionName string, readyChan chan struct{}, cancelFn context.CancelFunc) error {
-	if err := run(ctx, namespace, appName, localPort, remotePort, versionName, readyChan); err != nil {
+type Settings struct {
+	// ContextName (required) is the k8s context to use.
+	ContextName string
+	// AppName  (required) selects for pods with the label app='AppName'.
+	// If more than one pod is found, the first pod encountered is used.
+	AppName string
+	// LocalPort (required) is the localhost port to port-forward to.
+	LocalPort string
+	// RemotePort (required) is the port on the pod to port-forward from.
+	RemotePort string
+	// VersionName  (optional). If given this sub-selects for pods with the label version='VersionName'.
+	// If more than one pod is found, the first pod encountered is used.
+	VersionName string
+	// KubeconfigPath (optional). This overrides the path to the kubeconfig file from the default value of $HOME/.kube/config.
+	KubeconfigPath string
+	// ReadyChannel (optional). If ReadyChannel is specified, the commencement of port-forwarding can be detected by receiving from it.
+	ReadyChannel chan struct{}
+	// CancelFn (optional). If CancelFn is specified, it will be called upon any error except context.Canceled.
+	CancelFn context.CancelFunc
+}
+
+func (s *Settings) Validate() error {
+	if err := validateNonEmptyString("k8s context name", s.ContextName); err != nil {
+		return err
+	}
+	if err := validateNonEmptyString("k8s app name", s.AppName); err != nil {
+		return err
+	}
+	if err := validateTCPPort("local TCP port", s.LocalPort); err != nil {
+		return err
+	}
+	if err := validateTCPPort("remote TCP port", s.RemotePort); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Init initiates port-forwarding with the given Go context `ctx`.
+func Init(ctx context.Context, settings *Settings) error {
+	if err := run(ctx, settings); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
-		if cancelFn != nil {
-			cancelFn()
+		if settings.CancelFn != nil {
+			settings.CancelFn()
 		}
 		return err
 	}
 	return nil
 }
 
-func run(ctx context.Context, namespace, appName, localPort, remotePort, version string, readyChan chan struct{}) error {
-	if err := ValidateFlags(namespace, appName, localPort, remotePort); err != nil {
+func run(ctx context.Context, settings *Settings) error {
+	if err := settings.Validate(); err != nil {
 		return err
 	}
-	homeDir, ok := os.LookupEnv("HOME")
-	if !ok {
-		return fmt.Errorf("cannot locate home directory")
+	if settings.KubeconfigPath == "" {
+		homeDir, ok := os.LookupEnv("HOME")
+		if !ok {
+			return fmt.Errorf("cannot locate home directory")
+		}
+		settings.KubeconfigPath = filepath.Join(homeDir, ".kube", "config")
+
 	}
-	k8sConfigPath := filepath.Join(homeDir, ".kube", "config")
 
-	apiConfig, err := clientcmd.LoadFromFile(k8sConfigPath)
-
+	apiConfig, err := clientcmd.LoadFromFile(settings.KubeconfigPath)
 	if err != nil {
-		return fmt.Errorf("error loading k8s config file %s: %w", k8sConfigPath, err)
+		return fmt.Errorf("error loading k8s config from %s: %w", settings.KubeconfigPath, err)
 	}
-	k8sContext := apiConfig.CurrentContext
+
+	k8sCtx, ok := apiConfig.Contexts[settings.ContextName]
+	if !ok {
+		return fmt.Errorf("unknown context '%s'", settings.ContextName)
+	}
 
 	// Create a ClientConfig from the apiConfig
-	clientConfig := clientcmd.NewDefaultClientConfig(*apiConfig, &clientcmd.ConfigOverrides{})
+	clientConfig := clientcmd.NewDefaultClientConfig(*apiConfig, &clientcmd.ConfigOverrides{
+		CurrentContext: settings.ContextName,
+	})
 
-	// Get the *rest.Config from the ClientConfig
+	// Get the *rest.Settings from the ClientConfig
 	restConfig, err := clientConfig.ClientConfig()
 	if err != nil {
 		return fmt.Errorf("error creating k8s client REST config: %w", err)
@@ -68,23 +107,25 @@ func run(ctx context.Context, namespace, appName, localPort, remotePort, version
 	}
 
 	podClient := clientset.CoreV1()
-	labelSelector := fmt.Sprintf("app=%s", appName)
-	if version != "" {
-		labelSelector = fmt.Sprintf("app=%s,version=%s", appName, version)
+	labelSelector := fmt.Sprintf("app=%s", settings.AppName)
+	missingErr := fmt.Errorf("no k8s pods found for app '%s' in '%s' context", settings.AppName, settings.ContextName)
+	if settings.VersionName != "" {
+		labelSelector = fmt.Sprintf("app=%s,version=%s", settings.AppName, settings.VersionName)
+		missingErr = fmt.Errorf("no k8s pods found for app '%s' version '%s' in '%s' context", settings.AppName, settings.VersionName, settings.ContextName)
 	}
-	pods, err := podClient.Pods(namespace).List(ctx, metav1.ListOptions{
+	pods, err := podClient.Pods(k8sCtx.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
 	if err != nil {
 		return fmt.Errorf("error listing k8s pods: %w", err)
 	}
 	if len(pods.Items) == 0 {
-		return fmt.Errorf("no k8s pods found for app '%s' in namespace %s context %s", appName, namespace, k8sContext)
+		return missingErr
 	}
 
 	var podName string
 	for _, pod := range pods.Items {
-		// Just pick the first pod matching the app label
+		// Just pick the first pod matching the label selector
 		podName = pod.Name
 		break
 	}
@@ -107,16 +148,16 @@ func run(ctx context.Context, namespace, appName, localPort, remotePort, version
 	}
 
 	portForwardOptions.PodClient = clientset.CoreV1()
-	portForwardOptions.Namespace = namespace
+	portForwardOptions.Namespace = k8sCtx.Namespace
 	portForwardOptions.PodName = podName
 	portForwardOptions.Address = []string{"localhost"}
-	portForwardOptions.Ports = []string{fmt.Sprintf("%s:%s", localPort, remotePort)}
+	portForwardOptions.Ports = []string{fmt.Sprintf("%s:%s", settings.LocalPort, settings.RemotePort)}
 	portForwardOptions.Config = restConfig
 
 	portForwardOptions.StopChannel = make(chan struct{}, 1)
 
-	if readyChan != nil {
-		portForwardOptions.ReadyChannel = readyChan
+	if settings.ReadyChannel != nil {
+		portForwardOptions.ReadyChannel = settings.ReadyChannel
 	} else {
 		portForwardOptions.ReadyChannel = make(chan struct{})
 	}
@@ -125,7 +166,7 @@ func run(ctx context.Context, namespace, appName, localPort, remotePort, version
 		return fmt.Errorf("error validating the k8s portforward options: %w", err)
 	}
 
-	fmt.Printf("Starting k8s port forward from localhost:%s to %s:%s\n", localPort, podName, remotePort)
+	fmt.Printf("Starting k8s port forward from localhost:%s to %s:%s\n", settings.LocalPort, podName, settings.RemotePort)
 	if err = portForwardOptions.RunPortForwardContext(ctx); err != nil {
 		return fmt.Errorf("error port forwarding to k8s pod: %w", err)
 	}
