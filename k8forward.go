@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -35,6 +36,10 @@ type Settings struct {
 	ReadyChannel chan struct{}
 	// CancelFn (optional). If CancelFn is specified, it will be called upon any error except context.Canceled.
 	CancelFn context.CancelFunc
+	// Out is the data stream for output (optional). Defaults to os.Stdout.
+	Out io.Writer
+	// ErrOut is the data stream for error output (optional). Defaults to os.Stderr.
+	ErrOut io.Writer
 }
 
 func (s *Settings) Validate() error {
@@ -77,7 +82,12 @@ func run(ctx context.Context, settings *Settings) error {
 			return fmt.Errorf("cannot locate home directory")
 		}
 		settings.KubeconfigPath = filepath.Join(homeDir, ".kube", "config")
-
+	}
+	if settings.Out == nil {
+		settings.Out = os.Stdout
+	}
+	if settings.ErrOut == nil {
+		settings.ErrOut = os.Stderr
 	}
 
 	apiConfig, err := clientcmd.LoadFromFile(settings.KubeconfigPath)
@@ -138,8 +148,8 @@ func run(ctx context.Context, settings *Settings) error {
 	portForwardOptions := portforward.NewDefaultPortForwardOptions(
 		genericiooptions.IOStreams{
 			In:     os.Stdin,
-			Out:    os.Stdout,
-			ErrOut: os.Stderr,
+			Out:    settings.Out,
+			ErrOut: settings.ErrOut,
 		},
 	)
 	portForwardOptions.RESTClient, err = factory.RESTClient()
