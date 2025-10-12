@@ -3,6 +3,7 @@ package k8sforward
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 func validateNonEmptyString(name, value string) error {
@@ -21,4 +22,21 @@ func validateTCPPort(name, portStr string) error {
 		return nil
 	}
 	return fmt.Errorf("%s must be an integer from 0 to 65535 but was '%s'", name, portStr)
+}
+
+func validateLocalAddress(localAddress string) ([]string, error) {
+	if err := validateNonEmptyString("local address", localAddress); err != nil {
+		return nil, err
+	}
+	addressParts := strings.Split(localAddress, ":")
+	if len(addressParts) != 2 {
+		return nil, fmt.Errorf("invalidate local address '%s' should be host:port", localAddress)
+	}
+	if err := validateNonEmptyString("local host", addressParts[0]); err != nil {
+		return nil, err
+	}
+	if err := validateTCPPort("local port", addressParts[1]); err != nil {
+		return nil, err
+	}
+	return addressParts, nil
 }

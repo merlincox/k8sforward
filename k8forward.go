@@ -23,8 +23,8 @@ type Settings struct {
 	// AppName  (required) selects for pods with the label app='AppName'.
 	// If more than one pod is found, the first pod encountered is used.
 	AppName string
-	// LocalPort (required) is the localhost port to port-forward to.
-	LocalPort string
+	// LocalAddress (required) is the local address to port-forward to.
+	LocalAddress string
 	// RemotePort (required) is the port on the pod to port-forward from.
 	RemotePort string
 	// VersionName  (optional). If given this sub-selects for pods with the label version='VersionName'.
@@ -40,6 +40,9 @@ type Settings struct {
 	Out io.Writer
 	// ErrOut is the data stream for error output (optional). Defaults to os.Stderr.
 	ErrOut io.Writer
+
+	localHost string
+	localPort string
 }
 
 func (s *Settings) Validate() error {
@@ -49,12 +52,15 @@ func (s *Settings) Validate() error {
 	if err := validateNonEmptyString("k8s app name", s.AppName); err != nil {
 		return err
 	}
-	if err := validateTCPPort("local TCP port", s.LocalPort); err != nil {
+	addressParts, err := validateLocalAddress(s.LocalAddress)
+	if err != nil {
 		return err
 	}
 	if err := validateTCPPort("remote TCP port", s.RemotePort); err != nil {
 		return err
 	}
+	s.localHost = addressParts[0]
+	s.localPort = addressParts[1]
 	return nil
 }
 
@@ -79,7 +85,7 @@ func run(ctx context.Context, settings *Settings) error {
 	if settings.KubeconfigPath == "" {
 		homeDir, ok := os.LookupEnv("HOME")
 		if !ok {
-			return fmt.Errorf("cannot locate home directory")
+			return fmt.Errorf("cannot resolve home directory")
 		}
 		settings.KubeconfigPath = filepath.Join(homeDir, ".kube", "config")
 	}
@@ -160,8 +166,8 @@ func run(ctx context.Context, settings *Settings) error {
 	portForwardOptions.PodClient = clientset.CoreV1()
 	portForwardOptions.Namespace = k8sCtx.Namespace
 	portForwardOptions.PodName = podName
-	portForwardOptions.Address = []string{"localhost"}
-	portForwardOptions.Ports = []string{fmt.Sprintf("%s:%s", settings.LocalPort, settings.RemotePort)}
+	portForwardOptions.Address = []string{settings.localHost}
+	portForwardOptions.Ports = []string{fmt.Sprintf("%s:%s", settings.localPort, settings.RemotePort)}
 	portForwardOptions.Config = restConfig
 
 	portForwardOptions.StopChannel = make(chan struct{}, 1)
@@ -176,7 +182,10 @@ func run(ctx context.Context, settings *Settings) error {
 		return fmt.Errorf("error validating the k8s portforward options: %w", err)
 	}
 
-	fmt.Printf("Starting k8s port forward from localhost:%s to %s:%s\n", settings.LocalPort, podName, settings.RemotePort)
+	_, err = fmt.Fprintf(settings.Out, "Starting k8s port forward from %s to %s:%s\n", settings.LocalAddress, podName, settings.RemotePort)
+	if err != nil {
+		return fmt.Errorf("error writing to output: %w", err)
+	}
 	if err = portForwardOptions.RunPortForwardContext(ctx); err != nil {
 		return fmt.Errorf("error port forwarding to k8s pod: %w", err)
 	}
