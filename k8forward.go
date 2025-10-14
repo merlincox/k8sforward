@@ -9,12 +9,11 @@ import (
 	"path/filepath"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/kubectl/pkg/cmd/portforward"
-	"k8s.io/kubectl/pkg/cmd/util"
 )
 
 type Settings struct {
@@ -117,7 +116,6 @@ func run(ctx context.Context, settings *Settings) error {
 	if err != nil {
 		return fmt.Errorf("error creating k8s client REST config: %w", err)
 	}
-
 	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return fmt.Errorf("error creating k8s clientset: %w", err)
@@ -147,11 +145,6 @@ func run(ctx context.Context, settings *Settings) error {
 		break
 	}
 
-	// Copy the K8s CLI code for creating a factory
-	kubeConfigFlags := genericclioptions.NewConfigFlags(false)
-	clientGetter := util.NewMatchVersionFlags(kubeConfigFlags)
-	factory := util.NewFactory(clientGetter)
-
 	portForwardOptions := portforward.NewDefaultPortForwardOptions(
 		genericiooptions.IOStreams{
 			In:     os.Stdin,
@@ -159,7 +152,7 @@ func run(ctx context.Context, settings *Settings) error {
 			ErrOut: settings.ErrOut,
 		},
 	)
-	portForwardOptions.RESTClient, err = factory.RESTClient()
+	portForwardOptions.RESTClient, err = rest.RESTClientFor(restConfig)
 	if err != nil {
 		return fmt.Errorf("error configuring k8s REST client: %w", err)
 	}
