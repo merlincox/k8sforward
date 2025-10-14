@@ -105,6 +105,7 @@ func run(ctx context.Context, settings *Settings) error {
 	if !ok {
 		return fmt.Errorf("unknown context '%s'", settings.ContextName)
 	}
+	apiConfig.CurrentContext = settings.ContextName
 
 	// Create a ClientConfig from the apiConfig
 	clientConfig := clientcmd.NewDefaultClientConfig(*apiConfig, &clientcmd.ConfigOverrides{
@@ -147,9 +148,9 @@ func run(ctx context.Context, settings *Settings) error {
 	}
 
 	// Copy the K8s CLI code for creating a factory
-	kubeConfigFlags := genericclioptions.NewConfigFlags(true)
-	matchVersionKubeConfigFlags := util.NewMatchVersionFlags(kubeConfigFlags)
-	factory := util.NewFactory(matchVersionKubeConfigFlags)
+	kubeConfigFlags := genericclioptions.NewConfigFlags(false)
+	clientGetter := util.NewMatchVersionFlags(kubeConfigFlags)
+	factory := util.NewFactory(clientGetter)
 
 	portForwardOptions := portforward.NewDefaultPortForwardOptions(
 		genericiooptions.IOStreams{
@@ -187,7 +188,7 @@ func run(ctx context.Context, settings *Settings) error {
 		return fmt.Errorf("error writing to output: %w", err)
 	}
 	if err = portForwardOptions.RunPortForwardContext(ctx); err != nil {
-		return fmt.Errorf("error port forwarding to k8s pod: %w", err)
+		return fmt.Errorf("error port forwarding to k8s %s pod: %w", podName, err)
 	}
 
 	return nil
