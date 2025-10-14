@@ -8,7 +8,7 @@ import (
 
 func validateNonEmptyString(name, value string) error {
 	if value == "" {
-		return fmt.Errorf("%s must be specified", name)
+		return fmt.Errorf("%s must be a non-empty string", name)
 	}
 	return nil
 }
@@ -30,7 +30,7 @@ func validateLocalAddress(localAddress string) ([]string, error) {
 	}
 	addressParts := strings.Split(localAddress, ":")
 	if len(addressParts) != 2 {
-		return nil, fmt.Errorf("invalidate local address '%s' should be host:port", localAddress)
+		return nil, fmt.Errorf("local address must be in host:port format but was '%s'", localAddress)
 	}
 	if err := validateNonEmptyString("local host", addressParts[0]); err != nil {
 		return nil, err

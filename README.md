@@ -2,7 +2,7 @@
 
 Utility for k8s port-forwarding.
 
-Use case: standalone code needing to access k8s pod GRPC API, etc. withoout having to set up port-forwarding separately.
+Use case: standalone code needing to access k8s pod GRPC API, etc. without having to set up port-forwarding separately.
 
 ```
 import "github.com/merlincox/k8sforward"
