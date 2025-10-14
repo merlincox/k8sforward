@@ -107,7 +107,6 @@ func run(ctx context.Context, settings *Settings) error {
 	if !ok {
 		return fmt.Errorf("unknown context '%s'", settings.ContextName)
 	}
-	apiConfig.CurrentContext = settings.ContextName
 
 	// Create a ClientConfig from the apiConfig
 	clientConfig := clientcmd.NewDefaultClientConfig(*apiConfig, &clientcmd.ConfigOverrides{
@@ -156,9 +155,11 @@ func run(ctx context.Context, settings *Settings) error {
 			ErrOut: settings.ErrOut,
 		},
 	)
+
 	restConfig.GroupVersion = &schema.GroupVersion{Group: "", Version: "v1"}
 	restConfig.APIPath = "/api"
 	restConfig.NegotiatedSerializer = serializer.WithoutConversionCodecFactory{CodecFactory: scheme.Codecs}
+
 	portForwardOptions.RESTClient, err = rest.RESTClientFor(restConfig)
 	if err != nil {
 		return fmt.Errorf("error configuring k8s REST client: %w", err)
@@ -180,15 +181,15 @@ func run(ctx context.Context, settings *Settings) error {
 	}
 
 	if err = portForwardOptions.Validate(); err != nil {
-		return fmt.Errorf("error validating the k8s portforward options: %w", err)
+		return fmt.Errorf("error validating the k8s port-forwarding options: %w", err)
 	}
 
-	_, err = fmt.Fprintf(settings.Out, "Starting k8s port forward from %s to %s:%s\n", settings.LocalAddress, podName, settings.RemotePort)
-	if err != nil {
-		return fmt.Errorf("error writing to output: %w", err)
+	if _, err = fmt.Fprintf(settings.Out, "Starting k8s port-forward from %s to %s:%s on %s\n", settings.LocalAddress, podName, settings.RemotePort, settings.ContextName); err != nil {
+		return fmt.Errorf("error writing to output stream: %w", err)
 	}
+
 	if err = portForwardOptions.RunPortForwardContext(ctx); err != nil {
-		return fmt.Errorf("error port forwarding to k8s %s pod: %w", podName, err)
+		return fmt.Errorf("error port-forwarding to k8s %s pod: %w", podName, err)
 	}
 
 	return nil
