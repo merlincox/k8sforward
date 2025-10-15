@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -14,8 +17,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/kubectl/pkg/cmd/portforward"
-	"os"
-	"path/filepath"
 )
 
 type Settings struct {
@@ -45,6 +46,20 @@ type Settings struct {
 	localHost string
 	localPort string
 	validated bool
+}
+
+// Init initiates port-forwarding with the given Go context `ctx`.
+func Init(ctx context.Context, s *Settings) error {
+	if err := s.run(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		if s.CancelFn != nil {
+			s.CancelFn()
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Settings) Validate() error {
@@ -89,20 +104,6 @@ func (s *Settings) Validate() error {
 
 	s.validated = true
 
-	return nil
-}
-
-// Init initiates port-forwarding with the given Go context `ctx`.
-func Init(ctx context.Context, s *Settings) error {
-	if err := s.run(ctx); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil
-		}
-		if s.CancelFn != nil {
-			s.CancelFn()
-		}
-		return err
-	}
 	return nil
 }
 
