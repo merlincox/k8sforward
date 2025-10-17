@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"k8s.io/client-go/kubernetes/typed/core/v1"
 	"os"
 	"path/filepath"
 
@@ -43,8 +44,13 @@ type Settings struct {
 	// ErrOut is the data stream for error output (optional). Defaults to os.Stderr.
 	ErrOut io.Writer
 
-	localHost string
-	localPort string
+	localHost          string
+	localPort          string
+	namespace          string
+	restConfig         *rest.Config
+	podClient          v1.CoreV1Interface
+	portForwardOptions *portforward.PortForwardOptions
+
 	validated bool
 }
 
@@ -102,16 +108,10 @@ func (s *Settings) Validate() error {
 		s.ErrOut = os.Stderr
 	}
 
-	s.validated = true
-
-	return nil
+	return s.prepare()
 }
 
-func (s *Settings) run(ctx context.Context) error {
-	if err := s.Validate(); err != nil {
-		return err
-	}
-
+func (s *Settings) prepare() error {
 	apiConfig, err := clientcmd.LoadFromFile(s.KubeconfigPath)
 	if err != nil {
 		return fmt.Errorf("error loading the k8s config from %s: %w", s.KubeconfigPath, err)
@@ -122,90 +122,100 @@ func (s *Settings) run(ctx context.Context) error {
 		return fmt.Errorf("unknown k8s context '%s'", s.ContextName)
 	}
 
+	s.namespace = k8sCtx.Namespace
+
 	clientConfig := clientcmd.NewDefaultClientConfig(*apiConfig, &clientcmd.ConfigOverrides{
 		CurrentContext: s.ContextName,
 	})
 
-	restConfig, err := clientConfig.ClientConfig()
+	s.restConfig, err = clientConfig.ClientConfig()
 	if err != nil {
 		return fmt.Errorf("error creating the k8s client REST config: %w", err)
 	}
+	s.restConfig.GroupVersion = &schema.GroupVersion{Group: "", Version: "v1"}
+	s.restConfig.APIPath = "/api"
+	s.restConfig.NegotiatedSerializer = serializer.WithoutConversionCodecFactory{CodecFactory: scheme.Codecs}
 
-	clientset, err := kubernetes.NewForConfig(restConfig)
+	clientset, err := kubernetes.NewForConfig(s.restConfig)
 	if err != nil {
 		return fmt.Errorf("error creating k8s client set: %w", err)
 	}
 
-	podClient := clientset.CoreV1()
-	labelSelector := fmt.Sprintf("app=%s", s.AppName)
-	missingErr := fmt.Errorf("no running pods found for app '%s' in '%s' context", s.AppName, s.ContextName)
-
-	if s.VersionName != "" {
-		labelSelector = fmt.Sprintf("app=%s,version=%s", s.AppName, s.VersionName)
-		missingErr = fmt.Errorf("no running pods found for app '%s' version '%s' in '%s' context", s.AppName, s.VersionName, s.ContextName)
-	}
-
-	pods, err := podClient.Pods(k8sCtx.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: labelSelector,
-		FieldSelector: "status.phase=Running",
-	})
-	if err != nil {
-		return fmt.Errorf("error listing pods: %w", err)
-	}
-
-	if len(pods.Items) == 0 {
-		return missingErr
-	}
-
-	var podName string
-	for _, pod := range pods.Items {
-		// Just pick the first running pod matching the label selector
-		podName = pod.Name
-		break
-	}
-
-	portForwardOptions := portforward.NewDefaultPortForwardOptions(
+	s.podClient = clientset.CoreV1()
+	s.portForwardOptions = portforward.NewDefaultPortForwardOptions(
 		genericiooptions.IOStreams{
 			In:     os.Stdin,
 			Out:    s.Out,
 			ErrOut: s.ErrOut,
 		},
 	)
-
-	restConfig.GroupVersion = &schema.GroupVersion{Group: "", Version: "v1"}
-	restConfig.APIPath = "/api"
-	restConfig.NegotiatedSerializer = serializer.WithoutConversionCodecFactory{CodecFactory: scheme.Codecs}
-
-	portForwardOptions.RESTClient, err = rest.RESTClientFor(restConfig)
+	s.portForwardOptions.RESTClient, err = rest.RESTClientFor(s.restConfig)
 	if err != nil {
 		return fmt.Errorf("error configuring REST client: %w", err)
 	}
 
-	portForwardOptions.PodClient = clientset.CoreV1()
-	portForwardOptions.Namespace = k8sCtx.Namespace
-	portForwardOptions.PodName = podName
-	portForwardOptions.Address = []string{s.localHost}
-	portForwardOptions.Ports = []string{fmt.Sprintf("%s:%s", s.localPort, s.RemotePort)}
-	portForwardOptions.Config = restConfig
+	s.portForwardOptions.PodClient = s.podClient
+	s.portForwardOptions.Namespace = s.namespace
+	s.portForwardOptions.PodName = "placeholder"
+	s.portForwardOptions.Address = []string{s.localHost}
+	s.portForwardOptions.Ports = []string{fmt.Sprintf("%s:%s", s.localPort, s.RemotePort)}
+	s.portForwardOptions.Config = s.restConfig
 
-	portForwardOptions.StopChannel = make(chan struct{}, 1)
+	s.portForwardOptions.StopChannel = make(chan struct{}, 1)
 
 	if s.ReadyChannel != nil {
-		portForwardOptions.ReadyChannel = s.ReadyChannel
+		s.portForwardOptions.ReadyChannel = s.ReadyChannel
 	} else {
-		portForwardOptions.ReadyChannel = make(chan struct{})
+		s.portForwardOptions.ReadyChannel = make(chan struct{})
 	}
-
-	if err = portForwardOptions.Validate(); err != nil {
+	if err = s.portForwardOptions.Validate(); err != nil {
 		return fmt.Errorf("error validating the port-forwarding options: %w", err)
 	}
 
-	if _, err = fmt.Fprintf(s.Out, "Starting port-forward from %s to %s:%s on %s\n", s.LocalAddress, podName, s.RemotePort, s.ContextName); err != nil {
+	s.validated = true
+
+	return nil
+}
+
+func (s *Settings) run(ctx context.Context) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+
+	labelSelector := fmt.Sprintf("app=%s", s.AppName)
+	missingErrMsg := fmt.Sprintf("no running pods found for app '%s' in '%s' context", s.AppName, s.ContextName)
+
+	if s.VersionName != "" {
+		labelSelector = fmt.Sprintf("app=%s,version=%s", s.AppName, s.VersionName)
+		missingErrMsg = fmt.Sprintf("no running pods found for app '%s' version '%s' in '%s' context", s.AppName, s.VersionName, s.ContextName)
+	}
+
+	listOptions := metav1.ListOptions{
+		LabelSelector: labelSelector,
+		FieldSelector: "status.phase=Running",
+	}
+
+	pods, err := s.podClient.Pods(s.namespace).List(ctx, listOptions)
+	if err != nil {
+		return fmt.Errorf("error listing pods: %w", err)
+	}
+
+	if len(pods.Items) == 0 {
+		return fmt.Errorf(missingErrMsg)
+	}
+
+	for _, pod := range pods.Items {
+		// Just pick the first running pod matching the label selector
+		s.portForwardOptions.PodName = pod.Name
+		break
+	}
+
+	if _, err = fmt.Fprintf(s.Out, "Starting port-forward from %s to %s:%s on %s\n", s.LocalAddress, s.portForwardOptions.PodName, s.RemotePort, s.ContextName); err != nil {
 		return fmt.Errorf("error writing to output stream: %w", err)
 	}
 
-	if err = portForwardOptions.RunPortForwardContext(ctx); err != nil {
-		return fmt.Errorf("error port-forwarding from %s to %s:%s on %s: %w", s.LocalAddress, podName, s.RemotePort, s.ContextName, err)
+	if err = s.portForwardOptions.RunPortForwardContext(ctx); err != nil {
+		return fmt.Errorf("error port-forwarding from %s to %s:%s on %s: %w", s.LocalAddress, s.portForwardOptions.PodName, s.RemotePort, s.ContextName, err)
 	}
 
 	return nil
